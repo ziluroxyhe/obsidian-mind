@@ -18,6 +18,8 @@
 
 > **An Obsidian vault that gives AI coding agents persistent memory.** Built for Claude Code, with working hooks for Codex CLI and Gemini CLI. Start a session, talk about your day, and the agent handles the rest — notes, links, indexes, performance tracking. Every conversation builds on the last.
 
+**This fork adds experimental Kimi Code CLI support.** Follow the [Kimi setup](#kimi-code-cli-experimental-this-fork) below to install this fork's adapter.
+
 ---
 
 ## 🔴 The Problem
@@ -243,7 +245,7 @@ SessionStart loads **lightweight context** — small excerpts from key files, fi
 
 ### 🌐 Using with Other Agents
 
-obsidian-mind works with Claude Code, Codex CLI, and Gemini CLI. The vault conventions in `CLAUDE.md`, the hook scripts in `.claude/scripts/`, and the commands in `.claude/commands/` are all agent-agnostic — pure Markdown, TypeScript, and shell with no SDK dependencies.
+obsidian-mind works with Claude Code, Codex CLI, Gemini CLI, and Kimi Code CLI (experimental, in this fork). Shared vault conventions, prompts, and hook logic use Markdown, TypeScript, and shell with no runtime SDK dependencies; each CLI needs its own integration.
 
 **Claude Code** — full support. Hooks, commands, subagents, and the memory system all work out of the box.
 
@@ -251,10 +253,12 @@ obsidian-mind works with Claude Code, Codex CLI, and Gemini CLI. The vault conve
 
 **Gemini CLI** — reads `GEMINI.md` natively. Hook config at `.gemini/settings.json` maps Gemini's event names to the shared hook scripts.
 
+**Kimi Code CLI** — reads `AGENTS.md` and `.kimi-code/AGENTS.md`. Setup prepares project skills and agent profiles, and optionally installs vault-scoped hooks. Startup context and queued write/checklist feedback arrive on ordinary text prompts. See the [Kimi guide](.kimi-code/README.md).
+
 **Other agents** (Cursor, Windsurf, GitHub Copilot, JetBrains AI) — read `AGENTS.md` for vault conventions. Hook support varies by agent.
 
 > [!NOTE]
-> Hooks, commands, subagent prompts, and vault memory (`brain/`) are all agent-agnostic. Only the `~/.claude/` auto-memory loader is Claude Code-specific. See `AGENTS.md` for the full portability guide.
+> Shared prompts and vault memory (`brain/`) are portable; hook events and feedback timing vary by agent. The `~/.claude/` auto-memory loader and the separate `om.reason` inference backend require Claude. See `AGENTS.md` for the full portability guide.
 
 ---
 
@@ -532,8 +536,8 @@ thinking/               Scratchpad for drafts — promote findings, then delete
 templates/              Obsidian templates with YAML frontmatter
 
 .claude/
-  commands/             18 slash commands
-  agents/               9 subagents
+  commands/             20 slash commands
+  agents/               10 subagents
   scripts/              Hook scripts + charcount.ts utility
   skills/               Obsidian + QMD skills
   settings.json         5 hooks configuration

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { after, before, describe, test } from "node:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -193,6 +194,41 @@ describe("Kimi output protocol and lifecycle", () => {
 			assert.equal(fake.calls[0]?.root, root);
 			assert.match(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Missing wikilinks/);
 			assert.doesNotMatch(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Missing wikilinks/);
+		}
+	});
+	test("Write and Edit expand home-relative paths before checking vault scope", (t) => {
+		const mockedHome = t.mock.method(os, "homedir", () => temporary);
+		syncBuiltinESMExports();
+		try {
+			for (const tool of ["Write", "Edit"]) {
+				const fake = stub();
+				const session = `home-relative-${tool}`;
+				handleKimiHook(input("PostToolUse", session, { tool_name: tool, tool_input: { path: "~/vault/brain/Note.md" } }), root, fake.run);
+				assert.deepEqual(fake.calls[0]?.payload.tool_input, { path: "~/vault/brain/Note.md", file_path: join(root, "brain", "Note.md") });
+				assert.match(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Missing wikilinks/);
+			}
+		} finally {
+			mockedHome.mock.restore();
+			syncBuiltinESMExports();
+		}
+	});
+	test("home-relative writes outside the vault never validate an unrelated same-spelled local path", (t) => {
+		writeFileSync(join(external, "Home outside.md"), "external note");
+		// Kimi resolves ~/elsewhere against the OS home, never a literal ~ folder.
+		const misleading = join(root, "~", "elsewhere", "Home outside.md");
+		mkdirSync(dirname(misleading), { recursive: true });
+		writeFileSync(misleading, "unrelated local note");
+		const mockedHome = t.mock.method(os, "homedir", () => temporary);
+		syncBuiltinESMExports();
+		try {
+			for (const tool of ["Write", "Edit"]) {
+				const fake = stub();
+				handleKimiHook(input("PostToolUse", `home-outside-${tool}`, { tool_name: tool, tool_input: { path: "~/elsewhere/Home outside.md" } }), root, fake.run);
+				assert.equal(fake.calls.length, 0);
+			}
+		} finally {
+			mockedHome.mock.restore();
+			syncBuiltinESMExports();
 		}
 	});
 	test("revalidates pending writes and suppresses findings already fixed", () => {

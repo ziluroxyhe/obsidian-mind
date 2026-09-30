@@ -38,7 +38,7 @@ The `~/.claude/` auto-loaded memory index is Claude Code-specific — skip that 
 
 ## Reaching this vault from another repo
 
-The `om` MCP server (`.claude/scripts/om-mcp.mjs`) exposes this vault over MCP, so a session running in a **different repository** can search it, read notes, follow the graph, and record durable lessons back into it. It speaks plain MCP over stdio, so any MCP-capable agent can register it — nothing about it is Claude Code-specific.
+The `om` MCP server (`.claude/scripts/om-mcp.mjs`) exposes this vault over MCP, so a session running in a **different repository** can search it, read notes, follow the graph, and record durable lessons back into it. It speaks plain MCP over stdio, so any MCP-capable agent can register it. These memory operations are portable; the separate `om.reason` tool still launches Claude.
 
 Register it in the *consuming* project's MCP config, pointing at this vault's absolute path, then add a short section to that project's own agent doc telling it the vault exists. **Both steps are required**: measured, a session with the server wired but no repo-side instruction made zero vault calls, because a prohibition propagates into a session reliably while a positive "go look" does not.
 
@@ -46,7 +46,7 @@ Do not register the raw `qmd` server in a consuming repo — it searches every n
 
 ## Subagents
 
-9 subagents in `.claude/agents/` handle isolated tasks (brag spotting, vault auditing, cross-linking, etc.). The prompt content is agent-agnostic markdown.
+10 subagents in `.claude/agents/` handle isolated tasks (brag spotting, vault auditing, cross-linking, etc.). The prompt content is agent-agnostic markdown.
 
 - **Codex CLI**: as of the [Skills launch (Dec 2025)](https://developers.openai.com/codex/changelog), Codex discovers skills at `.agents/skills/<name>/SKILL.md` (directory-per-skill; frontmatter requires `name` and `description`). Mirror each `.claude/agents/*.md` into a `SKILL.md`, keeping the prompt body intact. See the [Codex Skills docs](https://developers.openai.com/codex/skills) for the full schema.
 - **Kimi Code CLI**: the setup script mirrors `.claude/agents/` into `.kimi-code/agents/`. Claude-specific model and turn-limit metadata is ignored; Kimi uses its own model configuration.

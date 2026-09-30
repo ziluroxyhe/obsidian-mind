@@ -45,7 +45,7 @@ Before enabling QMD semantic search, add `.kimi-code/` to Obsidian's **Settings 
 
 ## Setup and updates
 
-Use Node 22.19+ for Kimi Code CLI 2.1.1 (the adapter itself supports Node 22.6+) and run the commands above from the vault root. Kimi discovers the root `AGENTS.md` and `.kimi-code/AGENTS.md` as project instructions. The setup script copies the existing command, skill, and agent prompts into Kimi's discovery directories; `.claude/` remains the canonical source. Generated files are local and gitignored, and unrelated files are preserved. Rerun setup after updating or moving the vault; reinstall hooks after moving it because hook commands contain absolute paths.
+Use Node 22.19+ for Kimi Code CLI 2.1.1 (the adapter itself supports Node 22.6+) and run the commands above from the vault root. Kimi discovers the root `AGENTS.md` and `.kimi-code/AGENTS.md` as project instructions. The setup script copies the existing command, skill, and agent prompts into Kimi's discovery directories; `.claude/` remains the canonical source. Generated files are local and gitignored, and unrelated files are preserved. Rerunning setup removes unchanged generated files whose sources were removed or renamed; edited files are preserved and reported as conflicts. Rerun setup after updating or moving the vault; reinstall hooks after moving it because hook commands contain absolute paths.
 
 The default run only prepares local files. Review `.kimi-code/hooks.toml`, then use `--install-hooks` to install them. Hook installation currently supports macOS and Linux. Windows users can use the shared Markdown instructions manually; automatic hook installation is not supported.
 

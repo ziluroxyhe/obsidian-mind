@@ -13,6 +13,7 @@ import {
 	existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync,
 	renameSync, rmSync, writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 type RecordValue = Record<string, unknown>;
@@ -106,7 +107,11 @@ function save(path: string, text: string, createParent = true): void {
 function vaultFile(path: unknown, cwd: string, root: string): string | null {
 	if (typeof path !== "string" || !path) return null;
 	try {
-		const canonical = realpathSync(resolve(cwd, path));
+		// Kimi Write/Edit expand ~ before execution, but PostToolUse carries
+		// the original tool arguments. Match that expansion before scope checks.
+		const homeRelative = path.startsWith("~/") || (process.platform === "win32" && path.startsWith("~\\"));
+		const expanded = path === "~" ? homedir() : homeRelative ? join(homedir(), path.slice(2)) : path;
+		const canonical = realpathSync(resolve(cwd, expanded));
 		return isKimiVaultCwd(dirname(canonical), root) ? canonical : null;
 	} catch { return null; }
 }

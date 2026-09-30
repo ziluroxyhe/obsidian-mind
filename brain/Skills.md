@@ -92,6 +92,7 @@ Run `node --experimental-strip-types .scripts/kimi-setup.ts` to expose the share
 |-------|---------|------------|
 | `brag-spotter` | Proactively finds uncaptured wins and competency gaps | `/om-wrap-up`, `/om-weekly` |
 | `context-loader` | Loads all vault context about a person, project, incident, or concept | Direct — "load context on X" |
+| `correction-sweep` | Finds restatements of a corrected fact and proposes a correction plan without editing notes | `/om-correct` |
 | `cross-linker` | Finds missing wikilinks, orphans, broken backlinks across the vault | `/om-vault-audit` |
 | `people-profiler` | Bulk create/update person notes from Slack profiles | `/om-incident-capture` |
 | `review-prep` | Aggregates all performance evidence for a given review period | `/om-review-brief` |

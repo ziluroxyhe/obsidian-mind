@@ -282,6 +282,7 @@ function readState(path: string): ManagedState {
 	if (raw === null) return { version: 1, files: {} };
 	const state: unknown = JSON.parse(raw);
 	if (!isRecord(state) || state.version !== 1 || !isRecord(state.files) ||
+		!Object.keys(state.files).every((file) => /^(skills|agents)\//.test(file) && !file.includes("\\") && file.split("/").every((part) => part !== "" && part !== "." && part !== ".." && !part.includes("\0"))) ||
 		!Object.values(state.files).every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) ||
 		(state.qmd !== undefined && (typeof state.qmd !== "string" || !/^[a-f0-9]{64}$/.test(state.qmd))) ||
 		(state.hookId !== undefined && (typeof state.hookId !== "string" || !/^[a-f0-9]{16}$/.test(state.hookId))) ||
@@ -360,13 +361,66 @@ function copyManaged(source: string, relative: string, root: string, state: Mana
 	state.files[relative] = digest(value);
 }
 
-function copyTree(source: string, relative: string, root: string, state: ManagedState, result: SetupResult): void {
+function retainManagedTree(relative: string, state: ManagedState, current: Set<string>): boolean {
+	let retained = false;
+	for (const file of Object.keys(state.files)) {
+		if (file === relative || file.startsWith(`${relative}/`)) {
+			current.add(file);
+			retained = true;
+		}
+	}
+	return retained;
+}
+
+function copyTree(source: string, relative: string, root: string, state: ManagedState, result: SetupResult, current: Set<string>): void {
+	current.add(relative); // Preserve an old file when its source became a directory.
 	for (const entry of readdirSync(source, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
 		const child = join(source, entry.name);
 		const target = `${relative}/${entry.name}`;
-		if (entry.isDirectory()) copyTree(child, target, root, state, result);
-		else if (entry.isFile()) copyManaged(child, target, root, state, result);
-		else result.conflicts.push(child); // Source symlinks are never followed.
+		if (entry.isDirectory()) copyTree(child, target, root, state, result, current);
+		else if (entry.isFile()) {
+			current.add(target);
+			retainManagedTree(target, state, current);
+			copyManaged(child, target, root, state, result);
+		} else {
+			result.conflicts.push(child); // Source symlinks are never followed.
+			retainManagedTree(target, state, current);
+		}
+	}
+}
+
+/** Retire only unchanged files we own, without following links or recreating missing parents. */
+function retireManagedFiles(root: string, state: ManagedState, current: Set<string>, result: SetupResult): void {
+	for (const [relative, hash] of Object.entries(state.files)) {
+		if (current.has(relative)) continue;
+		const parts = relative.split("/");
+		let path = root;
+		let missing = false;
+		let blocked = false;
+		for (let index = 0; index < parts.length; index++) {
+			path = join(path, parts[index]!);
+			try {
+				const stat = lstatSync(path);
+				if (stat.isSymbolicLink() || (index === parts.length - 1 ? !stat.isFile() : !stat.isDirectory())) {
+					blocked = true;
+					break;
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				missing = true;
+				break;
+			}
+		}
+		if (blocked || (!missing && digest(readFileSync(path)) !== hash)) {
+			result.conflicts.push(join(root, relative));
+			continue;
+		}
+		if (!missing) {
+			unlinkSync(path);
+			result.changed.push(path);
+		}
+		// Keep failed removals owned so a subsequent setup can retry them.
+		delete state.files[relative];
 	}
 }
 
@@ -429,21 +483,34 @@ export function setupKimi(options: SetupOptions): SetupResult {
 	bindHookIdentity(state, vaultRoot, previousRoot(state, mcpPath, originalConfig));
 	const config = originalConfig === null ? null : mergeHooks(originalConfig, vaultRoot, hooks, state.hookId);
 	const skills = join(vaultRoot, ".claude/skills");
+	const current = new Set<string>();
 	// All config parsing happens above, before changing skills or their hashes.
 	// Persist successful copies even if a later filesystem operation fails.
 	try {
 		for (const entry of readdirSync(skills, { withFileTypes: true })) {
-			if (entry.isDirectory() && existsSync(join(skills, entry.name, "SKILL.md"))) {
-				copyTree(join(skills, entry.name), `skills/${entry.name}`, root, state, result);
+			if (entry.isDirectory()) {
+				try { lstatSync(join(skills, entry.name, "SKILL.md")); } catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+					throw error;
+				}
+				copyTree(join(skills, entry.name), `skills/${entry.name}`, root, state, result, current);
+			} else {
+				const retained = retainManagedTree(`skills/${entry.name}`, state, current);
+				if (entry.isSymbolicLink() || retained) result.conflicts.push(join(skills, entry.name));
 			}
 		}
 		for (const [sourceDir, targetDir] of [["commands", "skills"], ["agents", "agents"]] as const) {
 			for (const entry of readdirSync(join(vaultRoot, ".claude", sourceDir), { withFileTypes: true })) {
 				if (entry.isFile() && entry.name.endsWith(".md")) {
+					current.add(`${targetDir}/${entry.name}`);
 					copyManaged(join(vaultRoot, ".claude", sourceDir, entry.name), `${targetDir}/${entry.name}`, root, state, result);
+				} else if (entry.name.endsWith(".md")) {
+					retainManagedTree(`${targetDir}/${entry.name}`, state, current);
+					result.conflicts.push(join(vaultRoot, ".claude", sourceDir, entry.name));
 				}
 			}
 		}
+		retireManagedFiles(root, state, current, result);
 		writeChanged(result.hooksPath, hooks, result, true);
 		if (mcp) {
 			writeChanged(mcpPath, mcp.content, result, true);

@@ -132,6 +132,141 @@ test("MCP merge retains other servers and never overwrites an existing qmd regis
 	assert.deepEqual(second.backups, []);
 });
 
+test("updates retire unchanged managed commands, agents and skill files removed from the source", (t) => {
+	const { root } = fixture(t);
+	put(join(root, ".claude/skills/retired/SKILL.md"), skill);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const generated = join(root, ".kimi-code");
+	put(join(generated, "skills/personal.md"), "Keep this personal skill.\n");
+	renameSync(join(root, ".claude/commands/om-capture.md"), join(root, ".claude/commands/om-new.md"));
+	rmSync(join(root, ".claude/agents/review.md"));
+	rmSync(join(root, ".claude/skills/notes/references/rules.md"));
+	rmSync(join(root, ".claude/skills/retired"), { recursive: true });
+	const result = setupKimi({ vaultRoot: root, platform: "darwin" });
+	for (const path of ["skills/om-capture.md", "agents/review.md", "skills/notes/references/rules.md", "skills/retired/SKILL.md"]) {
+		assert.equal(existsSync(join(generated, path)), false, `Retired file remains discoverable: ${path}`);
+		assert.ok(result.changed.includes(join(generated, path)));
+		assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(generated, ".mind-setup.json"), "utf8")).files, path), false);
+	}
+	assert.equal(readFileSync(join(generated, "skills/om-new.md"), "utf8"), command);
+	assert.equal(readFileSync(join(generated, "skills/personal.md"), "utf8"), "Keep this personal skill.\n");
+	assert.deepEqual(result.conflicts, []);
+	assert.deepEqual(setupKimi({ vaultRoot: root, platform: "darwin" }).changed, []);
+});
+
+test("retired modified files remain conflicts while missing files relinquish ownership", (t) => {
+	const { root } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const generated = join(root, ".kimi-code");
+	const edited = join(generated, "skills/om-capture.md");
+	writeFileSync(edited, "My edited command.\n");
+	rmSync(join(generated, "skills/notes"), { recursive: true });
+	rmSync(join(root, ".claude/commands/om-capture.md"));
+	rmSync(join(root, ".claude/skills/notes"), { recursive: true });
+	const result = setupKimi({ vaultRoot: root, platform: "darwin" });
+	assert.ok(result.conflicts.includes(edited));
+	assert.equal(readFileSync(edited, "utf8"), "My edited command.\n");
+	const state = JSON.parse(readFileSync(join(generated, ".mind-setup.json"), "utf8"));
+	assert.ok(Object.hasOwn(state.files, "skills/om-capture.md"));
+	assert.equal(Object.keys(state.files).some((path) => path.startsWith("skills/notes/")), false);
+	assert.equal(existsSync(join(generated, "skills/notes")), false);
+});
+
+test("retirement preserves linked destinations and skipped source subtrees", { skip: process.platform === "win32" }, (t) => {
+	const { root, base } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const generated = join(root, ".kimi-code");
+	const outsideCommand = join(base, "outside.md");
+	put(outsideCommand, command);
+	rmSync(join(generated, "skills/om-capture.md"));
+	symlinkSync(outsideCommand, join(generated, "skills/om-capture.md"));
+	renameSync(join(generated, "agents"), join(base, "outside-agents"));
+	symlinkSync(join(base, "outside-agents"), join(generated, "agents"));
+	rmSync(join(root, ".claude/commands/om-capture.md"));
+	rmSync(join(root, ".claude/agents/review.md"));
+	renameSync(join(root, ".claude/skills/notes"), join(base, "source-notes"));
+	symlinkSync(join(base, "source-notes"), join(root, ".claude/skills/notes"));
+	const result = setupKimi({ vaultRoot: root, platform: "darwin" });
+	assert.ok(result.conflicts.includes(join(generated, "skills/om-capture.md")));
+	assert.ok(result.conflicts.includes(join(generated, "agents/review.md")));
+	assert.ok(result.conflicts.includes(join(root, ".claude/skills/notes")));
+	assert.equal(lstatSync(join(generated, "skills/om-capture.md")).isSymbolicLink(), true);
+	assert.equal(readFileSync(outsideCommand, "utf8"), command);
+	assert.equal(readFileSync(join(base, "outside-agents/review.md"), "utf8"), agent);
+	assert.equal(readFileSync(join(generated, "skills/notes/SKILL.md"), "utf8"), skill);
+	assert.equal(readFileSync(join(generated, "skills/notes/references/rules.md"), "utf8"), "Keep every reference.\n");
+});
+
+test("unreadable or dangling skill sources cannot be mistaken for retired files", { skip: process.platform === "win32" }, (t) => {
+	const { root, base } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const sourceSkill = join(root, ".claude/skills/notes/SKILL.md");
+	const generated = join(root, ".kimi-code");
+	rmSync(join(root, ".claude/commands/om-capture.md"));
+	const originalLstat = fs.lstatSync;
+	const mocked = t.mock.method(fs, "lstatSync", (...args: Parameters<typeof originalLstat>) => {
+		if (String(args[0]) === sourceSkill) throw Object.assign(new Error("simulated unreadable source"), { code: "EACCES" });
+		return originalLstat(...args);
+	});
+	syncBuiltinESMExports();
+	try {
+		assert.throws(() => setupKimi({ vaultRoot: root, platform: "darwin" }), /simulated unreadable source/);
+	} finally {
+		mocked.mock.restore();
+		syncBuiltinESMExports();
+	}
+	assert.equal(readFileSync(join(generated, "skills/om-capture.md"), "utf8"), command);
+	rmSync(sourceSkill);
+	symlinkSync(join(base, "missing-skill.md"), sourceSkill);
+	const result = setupKimi({ vaultRoot: root, platform: "darwin" });
+	assert.ok(result.conflicts.includes(sourceSkill));
+	assert.equal(readFileSync(join(generated, "skills/notes/SKILL.md"), "utf8"), skill);
+	assert.equal(existsSync(join(generated, "skills/om-capture.md")), false);
+});
+
+test("invalid ownership paths cannot retire files outside generated directories", (t) => {
+	const { root } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const path = join(root, ".kimi-code/.mind-setup.json");
+	const original = JSON.parse(readFileSync(path, "utf8"));
+	put(join(root, "sentinel.md"), command);
+	for (const file of ["skills/../../sentinel.md", "skills/..\\..\\sentinel.md", "../sentinel.md", "hooks.toml"]) {
+		const state = structuredClone(original);
+		state.files[file] = state.files["skills/om-capture.md"];
+		const invalid = JSON.stringify(state);
+		writeFileSync(path, invalid);
+		assert.throws(() => setupKimi({ vaultRoot: root, platform: "darwin" }), /Invalid setup state/);
+		assert.equal(readFileSync(join(root, "sentinel.md"), "utf8"), command);
+		assert.equal(readFileSync(path, "utf8"), invalid);
+	}
+});
+
+test("completed retirements retain retryable ownership after a later removal fails", (t) => {
+	const { root } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const generated = join(root, ".kimi-code");
+	rmSync(join(root, ".claude/commands/om-capture.md"));
+	rmSync(join(root, ".claude/agents/review.md"));
+	const originalUnlink = fs.unlinkSync;
+	const mocked = t.mock.method(fs, "unlinkSync", (path: Parameters<typeof originalUnlink>[0]) => {
+		if (String(path) === join(generated, "agents/review.md")) throw new Error("simulated removal failure");
+		return originalUnlink(path);
+	});
+	syncBuiltinESMExports();
+	try {
+		assert.throws(() => setupKimi({ vaultRoot: root, platform: "darwin" }), /simulated removal failure/);
+	} finally {
+		mocked.mock.restore();
+		syncBuiltinESMExports();
+	}
+	const state = JSON.parse(readFileSync(join(generated, ".mind-setup.json"), "utf8"));
+	assert.equal(existsSync(join(generated, "skills/om-capture.md")), false);
+	assert.equal(Object.hasOwn(state.files, "skills/om-capture.md"), false);
+	assert.ok(Object.hasOwn(state.files, "agents/review.md"));
+	assert.deepEqual(setupKimi({ vaultRoot: root, platform: "darwin" }).conflicts, []);
+	assert.equal(existsSync(join(generated, "agents/review.md")), false);
+});
+
 test("moving a prepared vault refreshes owned absolute paths without duplicating global hooks", (t) => {
 	const { root, home, base } = fixture(t);
 	setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
