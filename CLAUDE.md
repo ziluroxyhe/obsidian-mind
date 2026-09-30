@@ -20,7 +20,7 @@ This vault has [obsidian-skills](https://github.com/kepano/obsidian-skills) inst
 
 ### Custom Slash Commands
 
-Defined in `.claude/commands/`. Claude Code auto-surfaces every command with its description in the session's skills list — **that injected list is the live catalog**. Do not maintain a command table here (it drifts; the injected list can't — see Write-Correctness law 6). **Agents without that injection (Codex, Gemini, Cursor): read `brain/Skills.md`** — it carries the full command catalog plus usage docs and workflow sequences.
+Defined in `.claude/commands/`. Claude Code auto-surfaces every command with its description in the session's skills list — **that injected list is the live catalog**. Do not maintain a command table here (it drifts; the injected list can't — see Write-Correctness law 6). **Agents without that injection (Codex, Gemini, Kimi, Cursor): read `brain/Skills.md`** — it carries the full command catalog plus usage docs and workflow sequences.
 
 ## Vault Structure
 
@@ -53,6 +53,7 @@ Defined in `.claude/commands/`. Claude Code auto-surfaces every command with its
 | `.claude/agents/` | Subagents | See subagents table below |
 | `.claude/scripts/` | Hook scripts + the MCP server | `session-start.ts`, `classify-message.ts`, `validate-write.ts`, `pre-compact.ts`, `stop-checklist.ts`, `charcount.ts`, `om-mcp.mjs` (see **Reaching the vault from another repo** below) |
 | `.claude/skills/` | Obsidian + QMD skills | Loaded automatically via Skill tool |
+| `.kimi-code/` | Kimi Code instructions and generated integration | Run `.scripts/kimi-setup.ts`; see `.kimi-code/README.md` |
 
 ## Obsidian CLI
 
@@ -436,7 +437,7 @@ Specialized agents in `.claude/agents/` for heavy operations. They run in isolat
 
 ## Hooks
 
-Five lifecycle hooks in `.claude/settings.json`:
+Claude lifecycle hooks are configured in `.claude/settings.json`. Kimi uses an adapter installed by `.scripts/kimi-setup.ts`: startup context arrives on the first ordinary text prompt, while write/checklist feedback arrives on a subsequent ordinary text prompt. Native slash-skill turns in Kimi 2.1.1 skip this injection. Kimi transcript backup is not supported. See `.kimi-code/README.md` for the complete contract.
 
 | Hook | When | What |
 |------|------|------|

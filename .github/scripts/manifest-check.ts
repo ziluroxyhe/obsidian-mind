@@ -92,6 +92,7 @@ const WATCHED: ReadonlyArray<{
 	{ dir: ".claude-plugin", exts: [".json"] },
 	{ dir: ".codex", exts: [".json", ".md"] },
 	{ dir: ".gemini", exts: [".json", ".md"] },
+	{ dir: ".kimi-code", exts: [".md"] },
 	{ dir: "templates", exts: [".md"] },
 	{ dir: "bases", exts: [".base"] },
 ];

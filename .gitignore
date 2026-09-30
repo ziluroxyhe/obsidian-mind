@@ -20,6 +20,16 @@
 !.claude/
 .claude/settings.local.json
 
+# Kimi Code: generated integration files and per-session hook feedback.
+# Source prompts stay in .claude/; rerun .scripts/kimi-setup.ts after updates.
+.kimi-code/skills/
+.kimi-code/agents/
+.kimi-code/mcp.json
+.kimi-code/hooks.toml
+.kimi-code/.mind-setup.json
+.kimi-code/.mind-hook-state/
+.kimi-code/*.bak-*
+
 # QMD index (local, regenerated)
 .qmd/
 

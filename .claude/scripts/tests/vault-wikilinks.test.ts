@@ -44,6 +44,7 @@ const TARGET_SKIP = [
 	".claude",
 	".codex",
 	".gemini",
+	".kimi-code",
 	".github",
 	".shardmind",
 	"node_modules",

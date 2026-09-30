@@ -395,6 +395,17 @@ describe("isSkippedPath", () => {
 });
 
 describe("MACHINERY_DIRS", () => {
+	test("skips Kimi configuration and generated prompts, not similarly named notes", () => {
+		for (const path of [
+			".kimi-code",
+			".kimi-code/agents/om/system.md",
+			".kimi-code/skills/om-standup/SKILL.md",
+		]) {
+			assert.equal(isSkippedPath(path, MACHINERY_DIRS), true, path);
+		}
+		assert.equal(isSkippedPath(".kimi-code-notes.md", MACHINERY_DIRS), false);
+	});
+
 	// The listing walk is filesystem-level and does not read .gitignore, so
 	// the engine's own tree has to be skipped by name.
 	test("skips the ShardMind engine tree an installed vault carries (#156)", () => {

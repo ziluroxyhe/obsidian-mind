@@ -8,7 +8,11 @@ tags:
 
 # Skills
 
-Custom slash commands, subagents, and reusable workflows. Defined in `.claude/commands/` and `.claude/agents/`. **This note is the canonical command catalog** for agents that don't get the in-session skills injection (Codex, Gemini, Cursor) — keep it current when commands change; CLAUDE.md deliberately carries no command table.
+Custom slash commands, subagents, and reusable workflows. Defined in `.claude/commands/` and `.claude/agents/`. **This note is the canonical command catalog** for agents that don't get the in-session skills injection (Codex, Gemini, Kimi before setup, Cursor) — keep it current when commands change; CLAUDE.md deliberately carries no command table.
+
+## Kimi Code CLI
+
+Run `node --experimental-strip-types .scripts/kimi-setup.ts` to expose the shared commands as Kimi skills. Replace `/om-` in the tables below with `/skill:om-`, for example `/skill:om-dump <text>`. The same setup prepares the Obsidian skills and named subagent profiles. See `.kimi-code/README.md` for hooks and optional QMD setup.
 
 ## Slash Commands
 

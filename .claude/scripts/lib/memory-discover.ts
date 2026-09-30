@@ -27,7 +27,7 @@ import { MEMORY_SOURCE } from "./memory-write.ts";
 import { join, relative, sep } from "node:path";
 
 /** Directories never worth walking, in any vault. */
-const SKIP = new Set([".git", ".obsidian", ".shardmind", "node_modules", ".claude", ".codex", ".gemini"]);
+const SKIP = new Set([".git", ".obsidian", ".shardmind", "node_modules", ".claude", ".codex", ".gemini", ".kimi-code"]);
 
 /**
  * Frontmatter that marks a file as agent-written, built from the one constant.
