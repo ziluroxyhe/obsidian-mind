@@ -12,6 +12,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -288,6 +289,61 @@ describe("scoping results", () => {
 // ---------------------------------------------------------------------------
 
 describe("client liveness", () => {
+	test("a broken stdin rejects pending calls without crashing the host", () => {
+		const dir = mkdtempSync(join(tmpdir(), "qmd-broken-stdin-"));
+		const launcher = join(dir, "closed-stdin.mjs");
+		const marker = join(dir, "stdin-closed");
+		// Keep the child alive after closing its input: an exit handler alone
+		// cannot detect this failure. The marker makes the next write deterministic.
+		writeFileSync(launcher, `import { closeSync, writeFileSync } from "node:fs";
+closeSync(0);
+writeFileSync(${JSON.stringify(marker)}, String(process.pid));
+process.stdout.on("error", () => process.exit(0));
+setInterval(() => process.stdout.write("\\n"), 25);
+`);
+		// Isolate the client so an unhandled stream error fails this assertion,
+		// rather than killing the test runner. Heartbeats reap the fixture if the
+		// host crashes and closes stdout before its finally block can dispose it.
+		const driver = `import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { createQmdClient } from ${JSON.stringify(new URL("../lib/mcp-qmd-client.ts", import.meta.url).href)};
+import { waitFor } from ${JSON.stringify(new URL("./_helpers.ts", import.meta.url).href)};
+const client = createQmdClient(${JSON.stringify(dir)}, ${JSON.stringify(launcher)});
+try {
+	await waitFor(() => existsSync(${JSON.stringify(marker)}));
+	assert.ok(existsSync(${JSON.stringify(marker)}), "the child closed its input");
+	assert.equal(client.alive, true, "the launcher has not exited");
+	await Promise.all([
+		assert.rejects(client.ready, /qmd stdin failed/),
+		assert.rejects(client.call("tools/call", {}, 1000), /qmd stdin failed/),
+		assert.rejects(client.call("tools/call", {}, 1000), /qmd stdin failed/),
+	]);
+	assert.equal(client.alive, false);
+	await assert.rejects(client.call("tools/call", {}), /qmd unavailable/);
+	const pid = Number(readFileSync(${JSON.stringify(marker)}, "utf-8"));
+	const childRunning = () => {
+		try { process.kill(pid, 0); return true; }
+		catch (error) { if (error.code === "ESRCH") return false; throw error; }
+	};
+	await waitFor(() => !childRunning());
+	assert.equal(childRunning(), false, "the unusable launcher is reaped");
+	process.stdout.write("host survived; pending calls rejected");
+} finally {
+	client.dispose();
+}
+`;
+		try {
+			const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", driver], {
+				encoding: "utf-8",
+				timeout: 10_000,
+			});
+			assert.equal(result.status, 0, result.stderr || result.error?.message);
+			assert.match(result.stdout, /host survived; pending calls rejected/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("a client whose child exits reports itself dead", async () => {
 		// The caller memoises this client. Without a liveness signal, one qmd
 		// crash leaves a dead client in place whose pending map rejects every

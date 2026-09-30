@@ -304,6 +304,14 @@ export function createQmdClient(vaultRoot: string, launcherPath: string | null):
 	};
 	child.on("error", (e) => failAll(`qmd launcher failed: ${e.message}`));
 	child.on("exit", () => failAll("qmd launcher exited"));
+	// Pipe failures are emitted by stdin, not ChildProcess. This also catches
+	// queued writes that finish after dispose has killed the launcher.
+	child.stdin?.on("error", (e) => {
+		failAll(`qmd stdin failed: ${e.message}`);
+		// A launcher can close its input without exiting. It cannot serve more
+		// requests, and a replacement client must not leave it running.
+		child.kill();
+	});
 
 	const call = (method: string, params?: unknown, timeoutMs?: number): Promise<unknown> =>
 		new Promise((resolve, reject) => {
