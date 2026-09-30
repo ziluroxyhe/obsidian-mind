@@ -36,7 +36,7 @@ Agent: "You're working on Project Alpha, blocked on the BE contract.
         with your manager is tomorrow — review brief is ready."
 ```
 
-Works with **Claude Code** (full support), **Codex CLI**, **Gemini CLI**, and **Kimi Code CLI** (adapter) — shared notes and workflows, with agent-specific hook behavior.
+Works with **Claude Code** (full support), **Codex CLI**, **Gemini CLI**, and **Kimi Code CLI** (experimental adapter) — shared notes and workflows, with agent-specific hook behavior.
 
 Install via `shardmind install` or `git clone` — same vault either way.
 
@@ -122,11 +122,15 @@ git clone https://github.com/breferrari/obsidian-mind.git
 
 Or use it as a **GitHub template**. Skip the wizard, get the bare template. Then run through the same 4 steps above, plus fill in **`brain/North Star.md`** with your goals (the ShardMind wizard does this for you).
 
-### Kimi Code CLI (this fork)
+### Kimi Code CLI (experimental, this fork)
 
-Install the current [Kimi Code CLI](https://www.kimi.com/code/docs/en/kimi-code-cli/), then run from the vault root on macOS/Linux:
+This fork adds Kimi integration to [breferrari's Obsidian Mind](https://github.com/breferrari/obsidian-mind). Automated checks and real CLI startup-context delivery have been verified; model-backed note writing, skill execution, and cross-session recall have not yet been verified. A Kimi account with Code access is needed for those workflows.
+
+Install the current [Kimi Code CLI](https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html) (Node 22.19+ for CLI 2.1.1), then clone **this fork** and run on macOS/Linux:
 
 ```bash
+git clone https://github.com/ziluroxyhe/obsidian-mind.git
+cd obsidian-mind
 node --experimental-strip-types .scripts/kimi-setup.ts
 # Review .kimi-code/hooks.toml, then install this vault's hooks:
 node --experimental-strip-types .scripts/kimi-setup.ts --install-hooks

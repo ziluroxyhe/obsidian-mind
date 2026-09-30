@@ -7,6 +7,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
+	chmodSync,
 	copyFileSync,
 	existsSync,
 	lstatSync,
@@ -14,10 +15,13 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	renameSync,
+	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainModule } from "../.claude/scripts/lib/main-guard.ts";
 
@@ -42,6 +46,7 @@ type ManagedState = {
 	files: Record<string, string>;
 	qmd?: string;
 	hookId?: string;
+	vaultRoot?: string;
 };
 const STATE_FILE = ".mind-setup.json";
 
@@ -90,28 +95,95 @@ export function buildHooks(vaultRoot: string, nodePath: string): string {
 	);
 }
 
+type TomlLine = { offset: number; raw: string; code: string; comment: number };
+
 /**
- * TOML cannot append [[hooks]] to a hooks = [...] value. Recognize a root
- * empty-array declaration (including quoted keys); refuse nonempty/complex
- * declarations instead of parsing and rewriting the user's entire config.
- * Nested tables may legitimately have a different key called hooks.
+ * Locate actual statements/comments without treating multiline strings or
+ * array contents as TOML tables, keys, or managed markers. This is a lexer,
+ * not a config serializer: all unrelated bytes stay exactly as supplied.
  */
-function removeEmptyRootHooks(config: string): string {
+function tomlLines(config: string): TomlLine[] {
+	const lines: TomlLine[] = [];
+	let quote = "";
+	let depth = 0;
 	let offset = 0;
-	for (const line of config.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
-		if (/^[ \t]*\[/.test(line)) break;
-		if (/^[ \t]*(?:hooks|"hooks"|'hooks')[ \t]*=/.test(line)) {
-			const empty = line.match(
-				/^[ \t]*(?:hooks|"hooks"|'hooks')[ \t]*=[ \t]*\[[ \t]*\][ \t]*(#[^\r\n]*)?(\r?\n)?$/,
-			);
-			if (!empty) {
-				throw new Error(
-					"config.toml uses a root hooks = [...] value. Convert it to [[hooks]] tables before --install-hooks; the existing file was not changed.",
-				);
+	for (const raw of config.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+		const statement = quote === "" && depth === 0;
+		let code = "";
+		let comment = -1;
+		for (let i = 0; i < raw.length; i++) {
+			const char = raw[i]!;
+			if (quote) {
+				code += " ";
+				if (quote.startsWith('"') && char === "\\") {
+					i++;
+					code += " ";
+				} else if (quote.length === 3 && raw.startsWith(quote, i)) {
+					// TOML permits one/two quotes before a triple-quote terminator.
+					let count = 3;
+					while (count < 5 && raw[i + count] === quote[0]) count++;
+					i += count - 1;
+					code += " ".repeat(count - 1);
+					quote = "";
+				} else if (quote.length === 1 && char === quote) quote = "";
+				continue;
 			}
-			return config.slice(0, offset) + (empty[1] ?? "") + (empty[2] ?? "") + config.slice(offset + line.length);
+			if (char === "#") {
+				comment = i;
+				break;
+			}
+			if (char === '"' || char === "'") {
+				quote = raw.startsWith(char.repeat(3), i) ? char.repeat(3) : char;
+				i += quote.length - 1;
+				code += " ".repeat(quote.length);
+			} else {
+				code += char;
+				if (char === "[" || char === "{") depth++;
+				else if (char === "]" || char === "}") depth--;
+				if (depth < 0) throw new Error("Unbalanced config.toml; existing config was not changed.");
+			}
 		}
-		offset += line.length;
+		if (quote.length === 1) throw new Error("Unterminated config.toml string; existing config was not changed.");
+		if (statement) lines.push({ offset, raw, code, comment });
+		offset += raw.length;
+	}
+	if (quote || depth !== 0) throw new Error("Unterminated config.toml value; existing config was not changed.");
+	return lines;
+}
+
+function tomlKey(raw: string): string {
+	const key = raw.trim();
+	if (key.startsWith("'") && key.endsWith("'")) return key.slice(1, -1);
+	if (key.startsWith('"') && key.endsWith('"')) {
+		// JSON shares TOML's basic-string escapes except the eight-digit form.
+		let json = '"';
+		for (let i = 1; i < key.length - 1; i++) {
+			if (key[i] === "\\" && key[i + 1] === "U") {
+				const hex = key.slice(i + 2, i + 10);
+				if (!/^[a-fA-F0-9]{8}$/.test(hex)) throw new Error("Invalid TOML key escape; config was not changed.");
+				json += JSON.stringify(String.fromCodePoint(Number.parseInt(hex, 16))).slice(1, -1);
+				i += 9;
+			} else {
+				json += key[i];
+				if (key[i] === "\\") json += key[++i];
+			}
+		}
+		return JSON.parse(`${json}"`) as string;
+	}
+	return key;
+}
+
+function removeEmptyRootHooks(config: string, lines: TomlLine[]): string {
+	for (const line of lines) {
+		if (line.code.trimStart().startsWith("[")) break;
+		const equals = line.code.indexOf("=");
+		if (equals < 0 || line.code.slice(0, equals).includes(".") || tomlKey(line.raw.slice(0, equals)) !== "hooks") continue;
+		const value = line.raw.slice(equals + 1, line.comment < 0 ? undefined : line.comment).trim();
+		if (!/^\[[ \t]*\]$/.test(value)) {
+			throw new Error("config.toml uses a root hooks = [...] value. Convert it to [[hooks]] tables before --install-hooks; the existing file was not changed.");
+		}
+		const tail = line.comment >= 0 ? line.raw.slice(line.comment) : (line.raw.match(/\r?\n$/)?.[0] ?? "");
+		return config.slice(0, line.offset) + tail + config.slice(line.offset + line.raw.length);
 	}
 	return config;
 }
@@ -122,19 +194,22 @@ export function mergeHooks(config: string, vaultRoot: string, hooks: string, id 
 	const begin = `# BEGIN obsidian-mind hooks ${id}`;
 	const end = `# END obsidian-mind hooks ${id}`;
 	const block = `${begin}\n# Vault: ${JSON.stringify(vaultRoot)}\n${hooks}${end}\n`;
-	const starts = [...config.matchAll(new RegExp(`^${begin}\\r?$`, "gm"))];
-	const ends = [...config.matchAll(new RegExp(`^${end}\\r?$`, "gm"))];
+	const lines = tomlLines(config);
+	const starts = lines.filter((line) => line.raw.trim() === begin);
+	const ends = lines.filter((line) => line.raw.trim() === end);
 	if (starts.length !== ends.length || starts.length > 1) {
 		throw new Error("Ambiguous obsidian-mind hook markers; config.toml was not changed.");
 	}
 	if (starts.length === 1 && ends.length === 1) {
-		const start = starts[0]!.index;
+		const start = starts[0]!.offset;
 		const ending = ends[0]!;
-		if (ending.index < start) throw new Error("Reversed obsidian-mind hook markers; config.toml was not changed.");
-		const after = ending.index + ending[0].length;
-		return config.slice(0, start) + block + config.slice(after + (config[after] === "\n" ? 1 : 0));
+		if (ending.offset < start) throw new Error("Reversed obsidian-mind hook markers; config.toml was not changed.");
+		if (lines.some((line) => line.offset > start && line.offset < ending.offset && /^# (?:BEGIN|END) obsidian-mind hooks /.test(line.raw.trimStart()))) {
+			throw new Error("Nested obsidian-mind hook markers; config.toml was not changed.");
+		}
+		return config.slice(0, start) + block + config.slice(ending.offset + ending.raw.length);
 	}
-	const prefix = removeEmptyRootHooks(config);
+	const prefix = removeEmptyRootHooks(config, lines);
 	return prefix + (prefix === "" ? "" : prefix.endsWith("\n") ? "\n" : "\n\n") + block;
 }
 
@@ -144,11 +219,45 @@ function backup(path: string, result: SetupResult): void {
 	result.backups.push(backupPath);
 }
 
+/**
+ * Replace only after the whole new file exists. Respect intentional global
+ * config symlinks, retain file modes, and avoid changing other hard links.
+ */
+function atomicFile(path: string, write: (temporary: string, mode: number) => void): void {
+	let target = path;
+	let mode = 0o600;
+	let existing = false;
+	try {
+		const stat = lstatSync(path);
+		if (stat.isSymbolicLink()) target = realpathSync(path);
+		mode = statSync(target).mode & 0o777;
+		existing = true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		// A dangling symlink is not an absent file we own.
+		try {
+			if (lstatSync(path).isSymbolicLink()) throw new Error(`Refusing dangling config symlink: ${path}`);
+		} catch (nested) {
+			if ((nested as NodeJS.ErrnoException).code !== "ENOENT") throw nested;
+		}
+	}
+	const temporary = `${target}.tmp-${randomUUID()}`;
+	try {
+		write(temporary, mode);
+		if (existing) chmodSync(temporary, mode); // Creation mode alone is filtered by umask.
+		renameSync(temporary, target);
+	} finally {
+		try { unlinkSync(temporary); } catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+}
+
 function writeChanged(path: string, value: string, result: SetupResult, makeBackup = false): void {
 	const previous = readOptional(path);
 	if (previous === value) return;
 	if (makeBackup && previous !== null) backup(path, result);
-	writeFileSync(path, value, { mode: 0o600 });
+	atomicFile(path, (temporary, mode) => writeFileSync(temporary, value, { mode, flag: "wx" }));
 	result.changed.push(path);
 }
 
@@ -175,10 +284,51 @@ function readState(path: string): ManagedState {
 	if (!isRecord(state) || state.version !== 1 || !isRecord(state.files) ||
 		!Object.values(state.files).every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) ||
 		(state.qmd !== undefined && (typeof state.qmd !== "string" || !/^[a-f0-9]{64}$/.test(state.qmd))) ||
-		(state.hookId !== undefined && (typeof state.hookId !== "string" || !/^[a-f0-9]{16}$/.test(state.hookId)))) {
+		(state.hookId !== undefined && (typeof state.hookId !== "string" || !/^[a-f0-9]{16}$/.test(state.hookId))) ||
+		(state.vaultRoot !== undefined && (typeof state.vaultRoot !== "string" || !isAbsolute(state.vaultRoot)))) {
 		throw new Error(`Invalid setup state: ${path}. Preserved it without overwriting generated files.`);
 	}
 	return state as ManagedState;
+}
+
+function previousRoot(state: ManagedState, mcpPath: string, config: string | null): string | null {
+	if (state.vaultRoot) return state.vaultRoot;
+	// Migrate older state using only MCP metadata that we still own.
+	const mcp: unknown = JSON.parse(readOptional(mcpPath) ?? "{}");
+	if (isRecord(mcp) && isRecord(mcp.mcpServers) && isRecord(mcp.mcpServers.qmd)) {
+		const qmd = mcp.mcpServers.qmd;
+		if (state.qmd === digest(JSON.stringify(qmd)) && isRecord(qmd.env) && typeof qmd.env.CLAUDE_PROJECT_DIR === "string" && isAbsolute(qmd.env.CLAUDE_PROJECT_DIR)) return qmd.env.CLAUDE_PROJECT_DIR;
+	}
+	if (config !== null && state.hookId) {
+		const lines = tomlLines(config);
+		const start = lines.findIndex((line) => line.raw.trim() === `# BEGIN obsidian-mind hooks ${state.hookId}`);
+		const metadata = start < 0 ? undefined : lines[start + 1]?.raw.trim().match(/^# Vault: (.*)$/)?.[1];
+		if (metadata) {
+			try {
+				const path: unknown = JSON.parse(metadata);
+				if (typeof path === "string" && isAbsolute(path)) return path;
+			} catch { /* Unknown legacy metadata is handled conservatively below. */ }
+		}
+	}
+	return null;
+}
+
+function bindHookIdentity(state: ManagedState, vaultRoot: string, oldRoot: string | null): void {
+	if (!state.hookId) state.hookId = digest(vaultRoot).slice(0, 16);
+	else if (oldRoot === null) {
+		// With no trustworthy origin, never replace a potentially unrelated
+		// installation. An older orphaned global block can be removed manually.
+		state.hookId = randomUUID().replaceAll("-", "").slice(0, 16);
+	} else if (oldRoot !== vaultRoot) {
+		const raw = readOptional(join(oldRoot, ".kimi-code", STATE_FILE));
+		let oldState: unknown = null;
+		try { oldState = raw === null ? null : JSON.parse(raw); } catch { /* Unrelated old folder. */ }
+		if (isRecord(oldState) && oldState.hookId === state.hookId) {
+			// The original still owns this identity: this is a copy, not a move.
+			state.hookId = randomUUID().replaceAll("-", "").slice(0, 16);
+		}
+	}
+	state.vaultRoot = vaultRoot;
 }
 
 function copyManaged(source: string, relative: string, root: string, state: ManagedState, result: SetupResult): void {
@@ -204,7 +354,7 @@ function copyManaged(source: string, relative: string, root: string, state: Mana
 		return;
 	}
 	if (existing === null || !existing.equals(value)) {
-		copyFileSync(source, path);
+		atomicFile(path, (temporary) => copyFileSync(source, temporary));
 		result.changed.push(path);
 	}
 	state.files[relative] = digest(value);
@@ -220,7 +370,7 @@ function copyTree(source: string, relative: string, root: string, state: Managed
 	}
 }
 
-function mergeMcp(path: string, vaultRoot: string, nodePath: string, state: ManagedState, result: SetupResult): void {
+function planMcp(path: string, vaultRoot: string, nodePath: string, state: ManagedState, result: SetupResult): { content: string; hash: string } | null {
 	const previous = readOptional(path);
 	const config: unknown = previous === null ? {} : JSON.parse(previous);
 	if (!isRecord(config) || (config.mcpServers !== undefined && !isRecord(config.mcpServers))) {
@@ -234,16 +384,15 @@ function mergeMcp(path: string, vaultRoot: string, nodePath: string, state: Mana
 	};
 	if (Object.hasOwn(servers, "qmd")) {
 		const existing = JSON.stringify(servers.qmd);
-		if (existing === JSON.stringify(qmd)) return;
+		if (existing === JSON.stringify(qmd)) return null;
 		if (state.qmd !== digest(existing)) {
 			result.conflicts.push(`${path} (existing qmd server)`);
-			return;
+			return null;
 		}
 	}
 	servers.qmd = qmd;
 	config.mcpServers = servers;
-	writeChanged(path, `${JSON.stringify(config, null, 2)}\n`, result, true);
-	state.qmd = digest(JSON.stringify(qmd));
+	return { content: `${JSON.stringify(config, null, 2)}\n`, hash: digest(JSON.stringify(qmd)) };
 }
 
 export function setupKimi(options: SetupOptions): SetupResult {
@@ -252,6 +401,11 @@ export function setupKimi(options: SetupOptions): SetupResult {
 	}
 	const vaultRoot = realpathSync(options.vaultRoot);
 	const nodePath = resolve(options.nodePath ?? process.execPath);
+	for (const directory of [".claude", ".claude/skills", ".claude/commands", ".claude/agents"]) {
+		const path = join(vaultRoot, directory);
+		const stat = lstatSync(path);
+		if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Source directory must not be a symbolic link: ${path}`);
+	}
 	for (const required of ["vault-manifest.json", ".claude/scripts/kimi-hook.ts", ".claude/scripts/qmd-mcp.mjs"]) {
 		if (!existsSync(join(vaultRoot, required))) throw new Error(`Missing ${required}; run setup in an obsidian-mind checkout with Kimi support.`);
 	}
@@ -268,29 +422,39 @@ export function setupKimi(options: SetupOptions): SetupResult {
 	}
 	const state = readState(join(root, STATE_FILE));
 	const result: SetupResult = { changed: [], conflicts: [], backups: [], hooksPath: join(root, "hooks.toml"), configPath: options.installHooks ? join(resolve(options.kimiHome || process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code")), "config.toml") : null };
+	const hooks = buildHooks(vaultRoot, nodePath);
+	const mcpPath = join(root, "mcp.json");
+	const mcp = planMcp(mcpPath, vaultRoot, nodePath, state, result);
+	const originalConfig = result.configPath === null ? null : (readOptional(result.configPath) ?? "");
+	bindHookIdentity(state, vaultRoot, previousRoot(state, mcpPath, originalConfig));
+	const config = originalConfig === null ? null : mergeHooks(originalConfig, vaultRoot, hooks, state.hookId);
 	const skills = join(vaultRoot, ".claude/skills");
-	for (const entry of readdirSync(skills, { withFileTypes: true })) {
-		if (entry.isDirectory() && existsSync(join(skills, entry.name, "SKILL.md"))) {
-			copyTree(join(skills, entry.name), `skills/${entry.name}`, root, state, result);
-		}
-	}
-	for (const [sourceDir, targetDir] of [["commands", "skills"], ["agents", "agents"]] as const) {
-		for (const entry of readdirSync(join(vaultRoot, ".claude", sourceDir), { withFileTypes: true })) {
-			if (entry.isFile() && entry.name.endsWith(".md")) {
-				copyManaged(join(vaultRoot, ".claude", sourceDir, entry.name), `${targetDir}/${entry.name}`, root, state, result);
+	// All config parsing happens above, before changing skills or their hashes.
+	// Persist successful copies even if a later filesystem operation fails.
+	try {
+		for (const entry of readdirSync(skills, { withFileTypes: true })) {
+			if (entry.isDirectory() && existsSync(join(skills, entry.name, "SKILL.md"))) {
+				copyTree(join(skills, entry.name), `skills/${entry.name}`, root, state, result);
 			}
 		}
-	}
-	const hooks = buildHooks(vaultRoot, nodePath);
-	writeChanged(result.hooksPath, hooks, result, true);
-	mergeMcp(join(root, "mcp.json"), vaultRoot, nodePath, state, result);
-	state.hookId ??= digest(vaultRoot).slice(0, 16);
-	writeChanged(join(root, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`, result);
-	if (result.configPath !== null) {
-		const config = readOptional(result.configPath) ?? "";
-		const merged = mergeHooks(config, vaultRoot, hooks, state.hookId);
-		mkdirSync(dirname(result.configPath), { recursive: true });
-		writeChanged(result.configPath, merged, result, true);
+		for (const [sourceDir, targetDir] of [["commands", "skills"], ["agents", "agents"]] as const) {
+			for (const entry of readdirSync(join(vaultRoot, ".claude", sourceDir), { withFileTypes: true })) {
+				if (entry.isFile() && entry.name.endsWith(".md")) {
+					copyManaged(join(vaultRoot, ".claude", sourceDir, entry.name), `${targetDir}/${entry.name}`, root, state, result);
+				}
+			}
+		}
+		writeChanged(result.hooksPath, hooks, result, true);
+		if (mcp) {
+			writeChanged(mcpPath, mcp.content, result, true);
+			state.qmd = mcp.hash;
+		}
+		if (result.configPath !== null && config !== null) {
+			mkdirSync(dirname(result.configPath), { recursive: true });
+			writeChanged(result.configPath, config, result, true);
+		}
+	} finally {
+		writeChanged(join(root, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`, result);
 	}
 	return result;
 }
@@ -308,7 +472,7 @@ function main(): void {
 	for (const path of result.backups) process.stdout.write(`Backup: ${path}\n`);
 	if (result.configPath) process.stdout.write(`Hooks installed in ${result.configPath}. Restart Kimi to load them.\n`);
 	else process.stdout.write(`Home config unchanged. Review ${result.hooksPath}, then run:\n  node --experimental-strip-types .scripts/kimi-setup.ts --install-hooks\n`);
-	process.stdout.write("Open Kimi in this vault and try /skill:om-standup or /skill:om-dump <notes>.\nQMD search requires qmd plus the separate .scripts/qmd-bootstrap.ts setup.\n");
+	process.stdout.write("Open Kimi in this vault and send a regular message first, then try /skill:om-standup or /skill:om-dump <notes>.\nQMD search requires qmd plus the separate .scripts/qmd-bootstrap.ts setup.\n");
 }
 
 if (isMainModule(import.meta.url)) {

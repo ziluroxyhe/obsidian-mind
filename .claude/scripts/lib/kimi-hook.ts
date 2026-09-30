@@ -92,12 +92,8 @@ function readText(path: string): string {
 	try { return readFileSync(path, "utf-8"); } catch { return ""; }
 }
 
-function removeIfUnchanged(path: string, expected: string): void {
-	if (readText(path) === expected) rmSync(path, { force: true });
-}
-
-function save(path: string, text: string): void {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+function save(path: string, text: string, createParent = true): void {
+	if (createParent) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const temporary = `${path}.${randomUUID()}.tmp`;
 	try {
 		writeFileSync(temporary, text, { mode: 0o600 });
@@ -133,7 +129,13 @@ function safeCache(root: string, state: string): boolean {
 			catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
 		}
 		for (const file of files) {
-			try { if (lstatSync(file).isSymbolicLink()) return false; }
+			try {
+				const info = lstatSync(file);
+				if (info.isSymbolicLink() || (!info.isFile() && file !== join(state, "writes"))) return false;
+				// The shared classifier writes hints in place; a hardlink could
+				// otherwise redirect that write to a file outside this vault.
+				if (info.isFile() && info.nlink > 1) return false;
+			}
 			catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
 		}
 		return true;
@@ -158,6 +160,7 @@ export function handleKimiHook(
 	const delivered = join(state, "context-delivered");
 	const stopFile = join(state, "stop.txt");
 	const warnings = join(state, "writes");
+	const cursorFile = join(state, "write-cursor.txt");
 	const normalized = { ...payload, cwd: root };
 
 	switch (payload.hook_event_name) {
@@ -182,14 +185,17 @@ export function handleKimiHook(
 				const feedback = sharedHookText(run("validate-write.ts", {
 					...normalized, tool_input: { ...payload.tool_input, file_path: file },
 				}, root));
-				if (!feedback) removeIfUnchanged(pending, record);
+				if (!feedback) save(pending + ".ack", record, false);
 			} catch { /* keep this path for the next prompt */ }
 			return "";
 		}
 		case "Stop": {
 			if (payload.stop_hook_active === true) return "";
-			const checklist = sharedHookText(run("stop-checklist.ts", normalized, root));
-			if (checklist) save(stopFile, checklist);
+			mkdirSync(state, { recursive: true, mode: 0o700 });
+			try {
+				const checklist = sharedHookText(run("stop-checklist.ts", normalized, root));
+				if (checklist) save(stopFile, JSON.stringify({ text: checklist, generation: randomUUID() }), false);
+			} catch { /* optional checklist, or session closed during the scan */ }
 			return "";
 		}
 		case "SessionEnd":
@@ -212,7 +218,7 @@ export function handleKimiHook(
 					}, root, 35_000).trim();
 					if (context) {
 						blocks.push(context);
-						acknowledge.push(() => save(delivered, "1"));
+						acknowledge.push(() => save(delivered, "1", false));
 					}
 				} catch { /* retry startup on the next prompt */ }
 			}
@@ -227,16 +233,28 @@ export function handleKimiHook(
 			// finding, and cached prose would otherwise report a stale problem.
 			let entries: string[] = [];
 			try { entries = readdirSync(warnings); } catch { /* no pending writes */ }
-			for (const entry of entries.filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).slice(0, KIMI_MAX_PENDING_WRITES)) {
+			// One record and one acknowledgement per path, not per event.
+			// Keep both until SessionEnd: compare-then-unlink would delete a
+			// newer generation written concurrently between the two operations.
+			const pendingEntries = entries.filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).sort()
+				.map((entry) => ({ entry, raw: readText(join(warnings, entry)) }))
+				.filter(({ entry, raw }) => raw !== readText(join(warnings, entry) + ".ack"));
+			const cursor = readText(cursorFile);
+			// Advance even when a validation fails: a permanently failing file
+			// must not keep all later findings outside the per-prompt batch.
+			const batch = [
+				...pendingEntries.filter(({ entry }) => entry > cursor),
+				...pendingEntries.filter(({ entry }) => entry <= cursor),
+			].slice(0, KIMI_MAX_PENDING_WRITES);
+			for (const { entry, raw } of batch) {
 				const pending = join(warnings, entry);
-				const raw = readText(pending);
 				let file: string | null = null;
 				try {
 					const record: unknown = JSON.parse(raw);
 					if (isRecord(record)) file = vaultFile(record.path, root, root);
 				} catch { /* corrupt cache is optional context */ }
 				if (file === null) {
-					acknowledge.push(() => removeIfUnchanged(pending, raw));
+					acknowledge.push(() => save(pending + ".ack", raw, false));
 					continue;
 				}
 				try {
@@ -244,13 +262,20 @@ export function handleKimiHook(
 						...normalized, hook_event_name: "PostToolUse", tool_input: { file_path: file },
 					}, root));
 					if (feedback) blocks.push(feedback);
-					acknowledge.push(() => removeIfUnchanged(pending, raw));
+					acknowledge.push(() => save(pending + ".ack", raw, false));
 				} catch { /* keep failed/deferred paths for the next prompt */ }
 			}
-			const checklist = readText(stopFile);
-			if (checklist) {
-				blocks.push("Reminder from the previous turn:\n" + checklist);
-				acknowledge.push(() => rmSync(stopFile, { force: true }));
+			const last = batch.at(-1);
+			if (last) acknowledge.push(() => save(cursorFile, last.entry, false));
+			const stopRecord = readText(stopFile);
+			if (stopRecord && stopRecord !== readText(stopFile + ".ack")) {
+				let checklist = stopRecord;
+				try {
+					const parsed: unknown = JSON.parse(stopRecord);
+					checklist = isRecord(parsed) && typeof parsed.text === "string" ? parsed.text : "";
+				} catch { /* earlier adapter versions stored plain text */ }
+				if (checklist) blocks.push("Reminder from the previous turn:\n" + checklist);
+				acknowledge.push(() => save(stopFile + ".ack", stopRecord, false));
 			}
 			// Computation is capped below the installed 60s hook timeout. Do
 			// not mark startup or queued feedback delivered before that work.

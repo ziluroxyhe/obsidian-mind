@@ -1,5 +1,7 @@
 # Kimi Code CLI
 
+**Experimental integration.** Automated checks and real CLI startup-context delivery have been verified. Model-backed skill execution, note writing, and cross-session recall remain unverified; they require an account with Kimi Code access. This adapter does not enable account entitlements.
+
 This integration targets the current **Kimi Code CLI**, launched with `kimi`, using the `.kimi-code/` configuration layout documented on **2026-09-30**. The archived Python `kimi-cli` and its `.kimi/` layout are not supported by this adapter. See the [official migration guide](https://www.kimi.com/code/docs/en/kimi-code-cli/guides/migration.html).
 
 ## Quick start
@@ -43,9 +45,11 @@ Before enabling QMD semantic search, add `.kimi-code/` to Obsidian's **Settings 
 
 ## Setup and updates
 
-Use Node 22.6+ and run the commands above from the vault root. Kimi discovers the root `AGENTS.md` and `.kimi-code/AGENTS.md` as project instructions. The setup script copies the existing command, skill, and agent prompts into Kimi's discovery directories; `.claude/` remains the canonical source. Generated files are local and gitignored, and unrelated files are preserved. Rerun setup after updating or moving the vault; reinstall hooks after moving it because hook commands contain absolute paths.
+Use Node 22.19+ for Kimi Code CLI 2.1.1 (the adapter itself supports Node 22.6+) and run the commands above from the vault root. Kimi discovers the root `AGENTS.md` and `.kimi-code/AGENTS.md` as project instructions. The setup script copies the existing command, skill, and agent prompts into Kimi's discovery directories; `.claude/` remains the canonical source. Generated files are local and gitignored, and unrelated files are preserved. Rerun setup after updating or moving the vault; reinstall hooks after moving it because hook commands contain absolute paths.
 
 The default run only prepares local files. Review `.kimi-code/hooks.toml`, then use `--install-hooks` to install them. Hook installation currently supports macOS and Linux. Windows users can use the shared Markdown instructions manually; automatic hook installation is not supported.
+
+Moving a prepared vault updates its existing hook registration; copying one while the original remains creates an independent registration. For older preview state whose original location cannot be recovered, setup preserves existing global blocks and creates a new registration. Review the marked blocks in your Kimi user configuration and remove an obsolete block manually if needed.
 
 Kimi's [hooks](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html) are configured at user scope. A project `.kimi-code/config.toml` would not activate them. The adapter checks the event's working directory and ignores unrelated projects and nested Git repositories. It does not change Kimi's model, credentials, or permission rules. To remove the global integration, remove this vault's marked Obsidian Mind hook block from your Kimi user configuration.
 

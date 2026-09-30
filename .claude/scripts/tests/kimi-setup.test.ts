@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -135,6 +137,8 @@ test("moving a prepared vault refreshes owned absolute paths without duplicating
 	setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
 	const moved = join(base, "moved vault");
 	renameSync(root, moved);
+	// An unrelated folder may now occupy the old path; its identity is different.
+	put(join(root, ".kimi-code/.mind-setup.json"), '{"hookId":"0000000000000000"}');
 	const result = setupKimi({ vaultRoot: moved, kimiHome: home, installHooks: true, platform: "darwin" });
 	assert.deepEqual(result.conflicts, []);
 	const mcp = JSON.parse(readFileSync(join(moved, ".kimi-code/mcp.json"), "utf8"));
@@ -145,6 +149,38 @@ test("moving a prepared vault refreshes owned absolute paths without duplicating
 	assert.ok(!global.includes(root));
 	assert.ok(global.includes(moved));
 	assert.deepEqual(setupKimi({ vaultRoot: moved, kimiHome: home, installHooks: true, platform: "darwin" }).changed, []);
+});
+
+test("copying a prepared vault preserves the original vault's separate global hooks", (t) => {
+	const { root, home, base } = fixture(t);
+	setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
+	const copied = join(base, "copied vault");
+	cpSync(root, copied, { recursive: true });
+	setupKimi({ vaultRoot: copied, kimiHome: home, installHooks: true, platform: "darwin" });
+	const config = readFileSync(join(home, "config.toml"), "utf8");
+	assert.equal([...config.matchAll(/^# BEGIN obsidian-mind/gm)].length, 2);
+	assert.ok(config.includes(root));
+	assert.ok(config.includes(copied));
+	assert.deepEqual(setupKimi({ vaultRoot: copied, kimiHome: home, installHooks: true, platform: "darwin" }).changed, []);
+	assert.deepEqual(setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" }).changed, []);
+});
+
+test("legacy state without a recorded root recovers its origin from owned MCP metadata before copying", (t) => {
+	const { root, home, base } = fixture(t);
+	setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
+	const path = join(root, ".kimi-code/.mind-setup.json");
+	const legacy = JSON.parse(readFileSync(path, "utf8"));
+	delete legacy.vaultRoot;
+	writeFileSync(path, JSON.stringify(legacy));
+	const copied = join(base, "legacy copy");
+	cpSync(root, copied, { recursive: true });
+	setupKimi({ vaultRoot: copied, platform: "darwin" });
+	setupKimi({ vaultRoot: copied, kimiHome: home, installHooks: true, platform: "darwin" });
+	setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
+	const config = readFileSync(join(home, "config.toml"), "utf8");
+	assert.equal([...config.matchAll(/^# BEGIN obsidian-mind/gm)].length, 2);
+	assert.ok(config.includes(root));
+	assert.ok(config.includes(copied));
 });
 
 test("destination symlinks cannot redirect managed skill writes outside the vault", { skip: process.platform === "win32" }, (t) => {
@@ -178,6 +214,118 @@ test("broken or duplicated managed markers are refused", () => {
 	const complete = mergeHooks("", "/fixture", buildHooks("/fixture", "/usr/bin/node"));
 	assert.throws(() => mergeHooks(complete.replace(/^# END.*\n/m, ""), "/fixture", ""), /Ambiguous/);
 	assert.throws(() => mergeHooks(complete + complete, "/fixture", ""), /Ambiguous/);
+});
+
+test("TOML-looking text inside multiline strings cannot be removed or treated as a managed block", () => {
+	const hooks = buildHooks("/fixture", "/usr/bin/node");
+	for (const content of ["hooks = []", "[not-a-table]\nhooks = []", mergeHooks("", "/fixture", hooks).trimEnd()]) {
+		const original = `description = '''\n${content}\n'''\n`;
+		assert.ok(mergeHooks(original, "/fixture", hooks).startsWith(original));
+	}
+	const embeddedTable = "description = '''\n[not-a-table]\n'''\nhooks = []\n";
+	const merged = mergeHooks(embeddedTable, "/fixture", hooks);
+	assert.ok(!merged.includes("\nhooks = []"));
+	assert.ok(merged.startsWith("description = '''\n[not-a-table]\n'''\n"));
+	const encodedKey = '"\\u0068ooks" = []\n';
+	assert.ok(!mergeHooks(encodedKey, "/fixture", hooks).includes(encodedKey));
+	const literalEscape = '"\\\\U00000068ooks" = []\n';
+	assert.ok(mergeHooks(literalEscape, "/fixture", hooks).startsWith(literalEscape));
+	const dottedKey = '"providers"."mine"."type" = "kimi"\n';
+	assert.ok(mergeHooks(dottedKey, "/fixture", hooks).startsWith(dottedKey));
+	assert.throws(() => mergeHooks('hooks = ["existing"]\n', "/fixture", hooks), /root hooks/);
+});
+
+test("invalid existing config fails before changing generated skills or their ownership", (t) => {
+	const { root, home } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const managed = join(root, ".kimi-code/skills/notes/SKILL.md");
+	const state = join(root, ".kimi-code/.mind-setup.json");
+	const oldState = readFileSync(state, "utf8");
+	put(join(root, ".claude/skills/notes/SKILL.md"), skill + "Updated.\n");
+	const mcp = join(root, ".kimi-code/mcp.json");
+	const oldMcp = readFileSync(mcp, "utf8");
+	writeFileSync(mcp, "invalid JSON");
+	assert.throws(() => setupKimi({ vaultRoot: root, platform: "darwin" }));
+	assert.equal(readFileSync(managed, "utf8"), skill);
+	assert.equal(readFileSync(state, "utf8"), oldState);
+	writeFileSync(mcp, oldMcp);
+	put(join(home, "config.toml"), 'hooks = [{event="Stop",command="custom"}]\n');
+	assert.throws(() => setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" }), /root hooks/);
+	assert.equal(readFileSync(managed, "utf8"), skill);
+	assert.equal(readFileSync(state, "utf8"), oldState);
+	assert.deepEqual(setupKimi({ vaultRoot: root, platform: "darwin" }).conflicts, []);
+	assert.equal(readFileSync(managed, "utf8"), skill + "Updated.\n");
+});
+
+test("completed file ownership survives a later filesystem failure and a retry", (t) => {
+	const { root } = fixture(t);
+	const originalRename = fs.renameSync;
+	const mocked = t.mock.method(fs, "renameSync", (from: Parameters<typeof originalRename>[0], to: Parameters<typeof originalRename>[1]) => {
+		if (String(to) === join(root, ".kimi-code/agents/review.md")) throw new Error("simulated disk failure");
+		return originalRename(from, to);
+	});
+	syncBuiltinESMExports();
+	try {
+		assert.throws(() => setupKimi({ vaultRoot: root, platform: "darwin" }), /simulated disk failure/);
+	} finally {
+		mocked.mock.restore();
+		syncBuiltinESMExports();
+	}
+	assert.equal(readFileSync(join(root, ".kimi-code/skills/notes/SKILL.md"), "utf8"), skill);
+	assert.deepEqual(readdirSync(join(root, ".kimi-code/agents")), []);
+	assert.deepEqual(setupKimi({ vaultRoot: root, platform: "darwin" }).conflicts, []);
+});
+
+test("a linked source root is refused before materializing personal files", { skip: process.platform === "win32" }, (t) => {
+	const { root, base } = fixture(t);
+	const source = join(root, ".claude/skills");
+	const outside = join(base, "personal-skills");
+	renameSync(source, outside);
+	symlinkSync(outside, source);
+	assert.throws(() => setupKimi({ vaultRoot: root, platform: "darwin" }), /Source directory/);
+	assert.equal(existsSync(join(root, ".kimi-code")), false);
+});
+
+test("atomic replacement cannot overwrite another hard link to a managed skill", { skip: process.platform === "win32" }, (t) => {
+	const { root, base } = fixture(t);
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	const outside = join(base, "separate-copy.md");
+	linkSync(join(root, ".kimi-code/skills/notes/SKILL.md"), outside);
+	put(join(root, ".claude/skills/notes/SKILL.md"), skill + "Updated.\n");
+	setupKimi({ vaultRoot: root, platform: "darwin" });
+	assert.equal(readFileSync(outside, "utf8"), skill);
+	assert.equal(readFileSync(join(root, ".kimi-code/skills/notes/SKILL.md"), "utf8"), skill + "Updated.\n");
+});
+
+test("intentional global config symlinks remain links and retain target mode and unrelated bytes", { skip: process.platform === "win32" }, (t) => {
+	const { root, home, base } = fixture(t);
+	const target = join(base, "dotfiles/config.toml");
+	const original = '# My configuration\ndefault_model = "example"\n';
+	put(target, original);
+	const mode = statSync(target).mode & 0o777;
+	mkdirSync(home);
+	const path = join(home, "config.toml");
+	symlinkSync(target, path);
+	const result = setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
+	assert.equal(lstatSync(path).isSymbolicLink(), true);
+	assert.ok(readFileSync(target, "utf8").startsWith(original));
+	assert.equal(statSync(target).mode & 0o777, mode);
+	assert.equal(readFileSync(result.backups[0]!, "utf8"), original);
+	assert.deepEqual(readdirSync(dirname(target)), ["config.toml"]);
+});
+
+test("atomic config updates preserve existing modes even under a restrictive umask", { skip: process.platform === "win32" }, (t) => {
+	const { root, home } = fixture(t);
+	const path = join(home, "config.toml");
+	put(path, '# shared config\n');
+	chmodSync(path, 0o660);
+	const mask = process.umask(0o077);
+	try {
+		setupKimi({ vaultRoot: root, kimiHome: home, installHooks: true, platform: "darwin" });
+	} finally {
+		process.umask(mask);
+	}
+	assert.equal(statSync(path).mode & 0o777, 0o660);
 });
 
 test("native Windows setup reports unsupported shells before writing any project files", (t) => {

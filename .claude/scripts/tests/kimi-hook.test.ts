@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { after, before, describe, test } from "node:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +38,45 @@ after(() => rmTemp(temporary));
 
 function input(event: string, session: string, extra: Record<string, unknown> = {}) {
 	return { hook_event_name: event, session_id: session, cwd: root, ...extra };
+}
+
+function stateDirectory(session: string, vault = root): string {
+	return join(vault, ".kimi-code", ".mind-hook-state", createHash("sha256").update(session).digest("hex"));
+}
+
+/** Schedule a real writer process exactly at the acknowledgement boundary. */
+function replaceDuringAcknowledgement(path: string, value: string, act: () => void): void {
+	let replaced = false;
+	const replaceFromAnotherProcess = () => {
+		if (replaced) return;
+		replaced = true;
+		const writer = spawnSync(process.execPath, ["-e", `
+const fs = require("node:fs");
+const path = process.argv[1];
+fs.writeFileSync(path + ".concurrent", process.argv[2]);
+fs.renameSync(path + ".concurrent", path);
+`, path, value], { encoding: "utf8", timeout: 5_000 });
+		assert.equal(writer.status, 0, writer.stderr);
+	};
+	const originalRemove = fs.rmSync;
+	const originalRename = fs.renameSync;
+	try {
+		fs.rmSync = ((target, options) => {
+			if (String(target) === path) replaceFromAnotherProcess();
+			return originalRemove(target, options);
+		}) as typeof fs.rmSync;
+		fs.renameSync = ((from, to) => {
+			if (String(to) === path + ".ack") replaceFromAnotherProcess();
+			return originalRename(from, to);
+		}) as typeof fs.renameSync;
+		syncBuiltinESMExports();
+		act();
+	} finally {
+		fs.rmSync = originalRemove;
+		fs.renameSync = originalRename;
+		syncBuiltinESMExports();
+	}
+	assert.equal(replaced, true, "the concurrent writer must have run");
 }
 
 function stub() {
@@ -80,6 +123,31 @@ describe("Kimi vault scope", () => {
 		const fake = stub();
 		assert.equal(handleKimiHook(input("UserPromptSubmit", "linked", { cwd: isolated, prompt: "hello" }), isolated, fake.run), "");
 		assert.equal(fake.calls.length, 0);
+	});
+	test("refuses non-regular cache entries before invoking any shared hook", () => {
+		const session = "invalid-state";
+		mkdirSync(join(stateDirectory(session), "source.txt"), { recursive: true });
+		const fake = stub();
+		assert.equal(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), "");
+		assert.equal(fake.calls.length, 0);
+	});
+	test("a hardlinked hint cache cannot overwrite an external file through the real classifier", (t) => {
+		const isolated = join(temporary, "hardlinked-cache-vault");
+		const cache = join(isolated, ".kimi-code", ".mind-hook-state");
+		const directory = join(isolated, ".claude", "scripts");
+		mkdirSync(cache, { recursive: true });
+		mkdirSync(join(directory, "lib"), { recursive: true });
+		for (const file of ["classify-message.ts", "lib/hook-io.ts", "lib/matcher.ts", "lib/hint-state.ts", "lib/regex.ts", "lib/signals.ts"]) {
+			copyFileSync(join(scripts, file), join(directory, file));
+		}
+		writeFileSync(join(directory, "package.json"), '{"type":"module"}');
+		const sentinel = join(external, "hardlink-sentinel.json");
+		writeFileSync(sentinel, "external data must stay unchanged");
+		try { fs.linkSync(sentinel, join(cache, "hints.json")); }
+		catch { t.skip("hardlink creation unavailable on this platform"); return; }
+		const output = handleKimiHook(input("UserPromptSubmit", "hardlinked-hints", { cwd: isolated, prompt: "decision" }), isolated);
+		assert.equal(readFileSync(sentinel, "utf8"), "external data must stay unchanged");
+		assert.equal(output, "");
 	});
 });
 
@@ -159,10 +227,66 @@ describe("Kimi output protocol and lifecycle", () => {
 		assert.match(retried, /North Star/);
 		assert.match(retried, /Missing wikilinks/);
 	});
+	test("retrying failures cannot starve later queued writes", () => {
+		const fake = stub();
+		const session = "fair-retry";
+		for (let index = 0; index < KIMI_MAX_PENDING_WRITES + 1; index++) {
+			const path = `brain/Fair retry ${index}.md`;
+			writeFileSync(join(root, path), "# note");
+			handleKimiHook(input("PostToolUse", session, { tool_name: "Write", tool_input: { path } }), root, fake.run);
+		}
+		const failed = new Set<string>();
+		handleKimiHook(input("UserPromptSubmit", session), root, (script, payload) => {
+			if (script === "validate-write.ts") {
+				failed.add((payload.tool_input as { file_path: string }).file_path);
+				throw new Error("this file keeps timing out");
+			}
+			return "";
+		});
+		assert.equal(failed.size, KIMI_MAX_PENDING_WRITES);
+		const result = handleKimiHook(input("UserPromptSubmit", session), root, (script, payload) => {
+			if (script !== "validate-write.ts") return "";
+			if (failed.has((payload.tool_input as { file_path: string }).file_path)) {
+				throw new Error("still timing out");
+			}
+			return JSON.stringify({ systemMessage: "Finding from the remaining file" });
+		});
+		assert.match(result, /Finding from the remaining file/);
+	});
 	test("an initial PostToolUse validation failure still queues its path", () => {
 		const fake = stub();
 		assert.equal(handleKimiHook(input("PostToolUse", "first-failure", { tool_name: "Edit", tool_input: { path: "brain/Note.md" } }), root, () => { throw new Error("timeout"); }), "");
 		assert.match(handleKimiHook(input("UserPromptSubmit", "first-failure"), root, fake.run), /Missing wikilinks/);
+	});
+	test("a concurrent process replacing a queued write during acknowledgement is not lost", () => {
+		const fake = stub();
+		const session = "concurrent-ack";
+		const note = join(root, "brain", "Note.md");
+		const hash = createHash("sha256").update(note).digest("hex");
+		const pending = join(stateDirectory(session), "writes", `${hash}.json`);
+		handleKimiHook(input("PostToolUse", session, { tool_name: "Write", tool_input: { path: note } }), root, fake.run);
+		const newer = JSON.stringify({ path: note, generation: "newer-concurrent-write" });
+		// Put the other process exactly at the acknowledgement boundary.
+		// A compare-then-unlink implementation deletes the newer generation;
+		// an immutable acknowledgement records only what it actually read.
+		replaceDuringAcknowledgement(pending, newer, () => {
+			handleKimiHook(input("UserPromptSubmit", session), root, fake.run);
+		});
+		assert.match(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Missing wikilinks/);
+	});
+	test("repeated writes retain bounded cache files and skip acknowledged generations", () => {
+		const fake = stub();
+		const session = "bounded-cache";
+		fake.clearWarning();
+		for (let index = 0; index < 20; index++) {
+			handleKimiHook(input("PostToolUse", session, { tool_name: "Edit", tool_input: { path: "brain/Note.md" } }), root, fake.run);
+		}
+		assert.equal(readdirSync(join(stateDirectory(session), "writes")).length, 2);
+		fake.calls.length = 0;
+		handleKimiHook(input("UserPromptSubmit", session), root, fake.run);
+		assert.equal(fake.calls.filter((call) => call.script === "validate-write.ts").length, 0);
+		handleKimiHook(input("SessionEnd", session), root, fake.run);
+		assert.equal(existsSync(stateDirectory(session)), false);
 	});
 	test("bounds aggregate work and preserves paths deferred by the deadline", () => {
 		const fake = stub();
@@ -212,6 +336,37 @@ describe("Kimi output protocol and lifecycle", () => {
 		handleKimiHook(input("Stop", "ended"), root, fake.run);
 		assert.equal(handleKimiHook(input("SessionEnd", "ended"), root, fake.run), "");
 		assert.doesNotMatch(handleKimiHook(input("UserPromptSubmit", "ended"), root, fake.run), /checklist/);
+	});
+	test("a concurrently replaced Stop checklist survives acknowledgement of the previous one", () => {
+		const fake = stub();
+		const session = "concurrent-stop";
+		handleKimiHook(input("Stop", session), root, fake.run);
+		replaceDuringAcknowledgement(join(stateDirectory(session), "stop.txt"), "Newer checklist", () => {
+			assert.match(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Session end checklist/);
+		});
+		assert.match(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Newer checklist/);
+		assert.doesNotMatch(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /checklist/);
+		// Repeated identical text is a new turn, so it must still be delivered.
+		handleKimiHook(input("Stop", session), root, fake.run);
+		assert.match(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Session end checklist/);
+	});
+	test("a Stop hook finishing after SessionEnd cannot recreate its checklist", () => {
+		const fake = stub();
+		const session = "end-during-stop";
+		handleKimiHook(input("Stop", session), root, () => {
+			handleKimiHook(input("SessionEnd", session), root, fake.run);
+			return JSON.stringify({ systemMessage: "Expired checklist" });
+		});
+		assert.doesNotMatch(handleKimiHook(input("UserPromptSubmit", session), root, fake.run), /Expired checklist/);
+	});
+	test("prompt acknowledgements cannot recreate state removed by SessionEnd", () => {
+		const fake = stub();
+		const session = "end-during-prompt";
+		handleKimiHook(input("UserPromptSubmit", session), root, (script, payload, directory) => {
+			if (script === "classify-message.ts") handleKimiHook(input("SessionEnd", session), root, fake.run);
+			return fake.run(script, payload, directory);
+		});
+		assert.equal(existsSync(stateDirectory(session)), false);
 	});
 	test("malformed input, missing session IDs, PreCompact, and arbitrary events are no-ops", () => {
 		const fake = stub();
