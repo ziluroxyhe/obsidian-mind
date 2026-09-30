@@ -13,7 +13,7 @@ The hook scripts in `.claude/scripts/` are agent-agnostic TypeScript and shell, 
 | Claude Code | `.claude/settings.json` | Full support |
 | Codex CLI | `.codex/hooks.json` | Shared hook scripts |
 | Gemini CLI | `.gemini/settings.json` | Shared hook scripts |
-| Kimi Code CLI | `.scripts/kimi-setup.ts` → user `config.toml` | Adapter; feedback on user prompts (see `.kimi-code/README.md`) |
+| Kimi Code CLI | `.scripts/kimi-setup.ts` → user `config.toml` | Adapter; feedback on ordinary text prompts (see `.kimi-code/README.md`) |
 
 | Script | Purpose | Claude event | Codex event | Gemini event |
 |--------|---------|--------------|-------------|--------------|
@@ -54,7 +54,7 @@ Do not register the raw `qmd` server in a consuming repo — it searches every n
 
 ## What's Claude Code-specific
 
-The `~/.claude/` auto-memory loader is Claude Code-specific. Shared prompts and memory are portable, but hook event/output contracts need per-agent adaptation. Kimi write/checklist feedback is delivered on a subsequent user prompt, and transcript backup is unavailable. The separate `om.reason` MCP tool still launches Claude.
+The `~/.claude/` auto-memory loader is Claude Code-specific. Shared prompts and memory are portable, but hook event/output contracts need per-agent adaptation. Kimi write/checklist feedback is delivered on a subsequent ordinary text prompt, and transcript backup is unavailable. The separate `om.reason` MCP tool still launches Claude.
 
 ## Setup
 

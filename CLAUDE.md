@@ -437,7 +437,7 @@ Specialized agents in `.claude/agents/` for heavy operations. They run in isolat
 
 ## Hooks
 
-Claude lifecycle hooks are configured in `.claude/settings.json`. Kimi uses an adapter installed by `.scripts/kimi-setup.ts`: startup context arrives on the first user prompt, while write/checklist feedback arrives on a subsequent prompt. Kimi transcript backup is not supported. See `.kimi-code/README.md` for the complete contract.
+Claude lifecycle hooks are configured in `.claude/settings.json`. Kimi uses an adapter installed by `.scripts/kimi-setup.ts`: startup context arrives on the first ordinary text prompt, while write/checklist feedback arrives on a subsequent ordinary text prompt. Native slash-skill turns in Kimi 2.1.1 skip this injection. Kimi transcript backup is not supported. See `.kimi-code/README.md` for the complete contract.
 
 | Hook | When | What |
 |------|------|------|
