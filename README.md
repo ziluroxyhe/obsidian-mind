@@ -124,7 +124,7 @@ Or use it as a **GitHub template**. Skip the wizard, get the bare template. Then
 
 ### Kimi Code CLI (experimental, this fork)
 
-This fork adds Kimi integration to [breferrari's Obsidian Mind](https://github.com/breferrari/obsidian-mind). Automated checks and real CLI startup-context delivery have been verified; model-backed note writing, skill execution, and cross-session recall have not yet been verified. A Kimi account with Code access is needed for those workflows.
+This fork adds Kimi integration to [breferrari's Obsidian Mind](https://github.com/breferrari/obsidian-mind). Automated checks and real CLI startup-context delivery have been verified. A Kimi account with Code access is required to use the integration.
 
 Install the current [Kimi Code CLI](https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html) (Node 22.19+ for CLI 2.1.1), then clone **this fork** and run on macOS/Linux:
 

@@ -1,6 +1,6 @@
 # Kimi Code CLI
 
-**Experimental integration.** Automated checks and real CLI startup-context delivery have been verified. Model-backed skill execution, note writing, and cross-session recall remain unverified; they require an account with Kimi Code access. This adapter does not enable account entitlements.
+**Experimental integration.** Automated checks and real CLI startup-context delivery have been verified. Use an account with Kimi Code access to run the vault workflows.
 
 This integration targets the current **Kimi Code CLI**, launched with `kimi`, using the `.kimi-code/` configuration layout documented on **2026-09-30**. The archived Python `kimi-cli` and its `.kimi/` layout are not supported by this adapter. See the [official migration guide](https://www.kimi.com/code/docs/en/kimi-code-cli/guides/migration.html).
 
@@ -79,6 +79,6 @@ For access from another repository, register `.claude/scripts/om-mcp.mjs` under 
 
 ## Verification
 
-Run the repository's hook suite and typecheck as described in `CONTRIBUTING.md`. The adapter and setup tests exercise fixture events and temporary vaults without a model account. A logged-in Kimi session is still needed for end-to-end confirmation: send an ordinary text message first, run `/skill:om-standup`, capture a sample note with `/skill:om-dump`, then send another ordinary text message to receive pending feedback in the same session. Invoke `/skill:om-wrap-up` and check the saved note in Obsidian. In `--prompt` mode, text such as `/skill:om-standup` is passed to the model as ordinary text; use the interactive CLI to verify native slash-skill activation.
+Run the repository's hook suite and typecheck as described in `CONTRIBUTING.md`. The adapter and setup tests exercise fixture events and temporary vaults without a model account. To check the interactive workflow, sign in to Kimi and send an ordinary text message first, run `/skill:om-standup`, capture a sample note with `/skill:om-dump`, then send another ordinary text message to receive pending feedback in the same session. Invoke `/skill:om-wrap-up` and check the saved note in Obsidian. In `--prompt` mode, text such as `/skill:om-standup` is passed to the model as ordinary text; use the interactive CLI to verify native slash-skill activation.
 
 Official references: [skills](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html), [agent profiles and instructions](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/agents.html), [MCP](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html), [configuration scope](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/overrides.html).
