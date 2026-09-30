@@ -318,6 +318,7 @@ export const MACHINERY_DIRS: readonly string[] = [
 	".claude-plugin",
 	".codex",
 	".gemini",
+	".kimi-code",
 	".shardmind",
 	".qmd",
 	"node_modules",

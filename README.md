@@ -36,7 +36,7 @@ Agent: "You're working on Project Alpha, blocked on the BE contract.
         with your manager is tomorrow — review brief is ready."
 ```
 
-Works with **Claude Code** (full support), **Codex CLI**, and **Gemini CLI** — same hooks, same commands, same vault.
+Works with **Claude Code** (full support), **Codex CLI**, **Gemini CLI**, and **Kimi Code CLI** (adapter) — shared notes and workflows, with agent-specific hook behavior.
 
 Install via `shardmind install` or `git clone` — same vault either way.
 
@@ -121,6 +121,19 @@ git clone https://github.com/breferrari/obsidian-mind.git
 ```
 
 Or use it as a **GitHub template**. Skip the wizard, get the bare template. Then run through the same 4 steps above, plus fill in **`brain/North Star.md`** with your goals (the ShardMind wizard does this for you).
+
+### Kimi Code CLI (this fork)
+
+Install the current [Kimi Code CLI](https://www.kimi.com/code/docs/en/kimi-code-cli/), then run from the vault root on macOS/Linux:
+
+```bash
+node --experimental-strip-types .scripts/kimi-setup.ts
+# Review .kimi-code/hooks.toml, then install this vault's hooks:
+node --experimental-strip-types .scripts/kimi-setup.ts --install-hooks
+kimi
+```
+
+The first command prepares project skills, subagents, and MCP without changing your user configuration. `--install-hooks` backs up and merges the hooks into Kimi's user configuration. In Kimi, log in with `/login` and use `/skill:om-standup`, `/skill:om-dump`, or `/skill:om-wrap-up`. Startup context is injected on the first user prompt; write/checklist feedback arrives on a subsequent prompt. Transcript backup is not supported. See the [Kimi guide](.kimi-code/README.md) for setup, updates, and limitations. This is a separate setup step; the existing ShardMind wizard does not install Kimi hooks.
 
 ### 🔍 Recommended: QMD Semantic Search
 

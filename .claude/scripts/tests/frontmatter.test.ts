@@ -49,6 +49,17 @@ describe("shouldSkipFile — skip rules", () => {
 	test("skips .gemini/ paths", () => {
 		assert.equal(shouldSkipFile("/vault/.gemini/settings.md"), true);
 	});
+	test("skips Kimi instructions and generated skills on either platform", () => {
+		for (const path of [
+			"/vault/.kimi-code/README.md",
+			"/vault/.kimi-code/agents/om/system.md",
+			"/vault/.kimi-code/skills/om-standup/SKILL.md",
+			"C:\\vault\\.kimi-code\\skills\\om-standup\\SKILL.md",
+		]) {
+			assert.equal(shouldSkipFile(path), true, path);
+		}
+		assert.equal(shouldSkipFile("/vault/work/.kimi-code-notes.md"), false);
+	});
 	test("skips .github/ paths (PR templates, workflow docs)", () => {
 		assert.equal(shouldSkipFile("/repo/.github/pull_request_template.md"), true);
 		assert.equal(shouldSkipFile("/repo/.github/ISSUE_TEMPLATE/bug.md"), true);

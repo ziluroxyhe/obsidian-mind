@@ -1,14 +1,15 @@
 /**
- * Unit tests for manifest-check pure functions: globToRegex and isCovered.
- * The filesystem walk and warning emission in the entry point are exercised
- * live by the workflow; these lock the matching grammar.
+ * Tests for manifest matching, filesystem paths, and entry-point failures
+ * when a newly watched infrastructure directory loses its coverage.
  */
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	globToRegex,
 	isCovered,
@@ -159,5 +160,33 @@ describe("listTopLevelFiles", () => {
 
 	test("a missing directory is empty, not a throw", () => {
 		assert.deepEqual(listTopLevelFiles("does/not/exist", [".md"]), []);
+	});
+});
+
+describe("manifest-check — Kimi infrastructure coverage", () => {
+	test("rejects uncovered Kimi docs and passes once their manifest coverage is restored", () => {
+		const dir = mkdtempSync(join(tmpdir(), "mc-kimi-"));
+		const script = fileURLToPath(new URL("../../../.github/scripts/manifest-check.ts", import.meta.url));
+		const run = () => spawnSync(process.execPath, [
+			"--disable-warning=ExperimentalWarning", "--experimental-strip-types", script,
+		], { cwd: dir, encoding: "utf8", timeout: 10_000 });
+		try {
+			mkdirSync(join(dir, ".kimi-code"));
+			writeFileSync(join(dir, ".kimi-code", "README.md"), "# Kimi setup\n");
+			const manifest = join(dir, "vault-manifest.json");
+			// Deliberately remove only Kimi coverage: the checker itself must go
+			// red, then green after restoring it (CONTRIBUTING.md guard contract).
+			writeFileSync(manifest, JSON.stringify({ infrastructure: ["vault-manifest.json"] }));
+			const broken = run();
+			assert.equal(broken.status, 1, broken.stderr);
+			assert.match(broken.stdout, /::error::/);
+			assert.match(broken.stdout, /\.kimi-code\/README\.md/);
+			writeFileSync(manifest, JSON.stringify({ infrastructure: ["vault-manifest.json", ".kimi-code/**"] }));
+			const restored = run();
+			assert.equal(restored.status, 0, restored.stderr);
+			assert.equal(restored.stdout, "");
+		} finally {
+			rmTemp(dir);
+		}
 	});
 });

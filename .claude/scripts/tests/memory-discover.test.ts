@@ -100,6 +100,7 @@ describe("walking", () => {
 			put(dir, "node_modules/pkg/readme.md", HUMAN);
 			put(dir, ".git/x.md", HUMAN);
 			put(dir, ".obsidian/y.md", HUMAN);
+			put(dir, ".kimi-code/skills/om-standup.md", HUMAN);
 			// The bundled template copy is a whole second vault; walking it would
 			// double every count in this module.
 			put(dir, ".shardmind/template/brain/z.md", HUMAN);
@@ -294,6 +295,15 @@ describe("locating the qmd launcher", () => {
 			const r = discoverQmdLauncher(dir);
 			assert.equal(r.source, "absent");
 			assert.equal(r.path, null);
+		});
+	});
+
+	test("generated Kimi skill files cannot masquerade as the vault launcher", () => {
+		withVault((dir) => {
+			put(dir, ".kimi-code/skills/qmd/qmd-mcp.mjs", "// skill example, not the vault launcher");
+			assert.deepEqual(discoverQmdLauncher(dir), { path: null, source: "absent" });
+			const launcher = put(dir, ".scripts/qmd-mcp.mjs", "// actual launcher");
+			assert.deepEqual(discoverQmdLauncher(dir), { path: launcher, source: "discovered" });
 		});
 	});
 });

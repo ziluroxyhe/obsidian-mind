@@ -20,6 +20,7 @@ const SKIP_PATH_SEGMENTS: readonly string[] = [
 	".claude/",
 	".codex/",
 	".gemini/",
+	".kimi-code/",
 	".github/",
 	".obsidian/",
 	"templates/",

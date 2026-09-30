@@ -80,6 +80,22 @@ const REQUIRED_SECTIONS = [
 ];
 
 describe("session-start — silence contract and structure", () => {
+	test("generated Kimi prompts and skills do not appear as vault notes", () => {
+		const kimiDir = join(TMP_DIR, ".kimi-code");
+		try {
+			for (const subdir of ["agents/om", "skills/om-standup"]) {
+				mkdirSync(join(kimiDir, subdir), { recursive: true });
+				writeFileSync(join(kimiDir, subdir, "generated.md"), "# Generated Kimi prompt\n");
+			}
+			const { stdout, code } = runHook();
+			assert.equal(code, 0);
+			assert.doesNotMatch(stdout, /\.kimi-code|generated\.md/);
+			assert.match(stdout, /brain\/North Star\.md/, "ordinary notes remain listed");
+		} finally {
+			rmTemp(kimiDir);
+		}
+	});
+
 	test("exits 0 with empty stderr on a minimal vault", () => {
 		const { code, stderr } = runHook();
 		assert.equal(code, 0);
